@@ -9,6 +9,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.hardware.ConsumerIrManager
 import android.media.AudioManager
 import android.media.ToneGenerator
@@ -27,6 +28,7 @@ import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -35,6 +37,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.InputStream
 import java.io.OutputStream
+import java.io.PrintWriter
+import java.io.StringWriter
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -49,7 +53,7 @@ import javax.crypto.spec.SecretKeySpec
 
 class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
-    private lateinit var webView: WebView
+    private var webView: WebView? = null
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -57,6 +61,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var bluetoothAdapter: BluetoothAdapter? = null
     private var bleGatt: BluetoothGatt? = null
     private var bleWriteChar: BluetoothGattCharacteristic? = null
+    private var bleScanStarted = false
 
     private var tts: TextToSpeech? = null
     private var speechRecognizer: SpeechRecognizer? = null
@@ -72,75 +77,140 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        hideSystemUI()
-
-        irManager = getSystemService(Context.CONSUMER_IR_SERVICE) as? ConsumerIrManager
-        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
-        bluetoothAdapter = btManager?.adapter
-        tts = TextToSpeech(this, this)
-
-        webView = WebView(this).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            webViewClient = WebViewClient()
-            webChromeClient = WebChromeClient()
-            addJavascriptInterface(PanelBridge(), "AndroidBridge")
-            loadUrl("file:///android_asset/index.html")
+        Thread.setDefaultUncaughtExceptionHandler { _, throwable ->
+            val sw = StringWriter()
+            throwable.printStackTrace(PrintWriter(sw))
+            getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+                .edit()
+                .putString("last_crash", sw.toString().take(1500))
+                .apply()
         }
-        setContentView(webView)
 
+        super.onCreate(savedInstanceState)
+
+        val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+        val lastCrash = prefs.getString("last_crash", null)
+        if (!lastCrash.isNullOrEmpty()) {
+            prefs.edit().remove("last_crash").apply()
+            showFallbackText("Önceki Çökme Kaydı:\n\n$lastCrash")
+            return
+        }
+
+        try {
+            irManager = getSystemService(Context.CONSUMER_IR_SERVICE) as? ConsumerIrManager
+            val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+            bluetoothAdapter = btManager?.adapter
+        } catch (_: Throwable) { }
+
+        try {
+            tts = TextToSpeech(this, this)
+        } catch (_: Throwable) { }
+
+        try {
+            val wv = WebView(this).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.mediaPlaybackRequiresUserGesture = false
+                webViewClient = WebViewClient()
+                webChromeClient = WebChromeClient()
+                addJavascriptInterface(PanelBridge(), "AndroidBridge")
+                loadUrl("file:///android_asset/index.html")
+            }
+            webView = wv
+            setContentView(wv)
+        } catch (t: Throwable) {
+            showFallbackText("WebView Başlatılamadı (Ayarlar'dan Android System WebView'i etkinleştirin):\n\n${t.message}")
+            return
+        }
+
+        hideSystemUI()
         requestAllPermissions()
-        startBleThermometerScan()
+        if (hasBlePermission()) {
+            startBleThermometerScan()
+        }
+    }
+
+    private fun showFallbackText(msg: String) {
+        val tv = TextView(this).apply {
+            text = msg
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.BLACK)
+            textSize = 14f
+            setPadding(36, 36, 36, 36)
+        }
+        setContentView(tv)
     }
 
     private fun hideSystemUI() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.let {
-                it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                window.insetsController?.let {
+                    it.hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                    it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                }
+            } else {
+                @Suppress("DEPRECATION")
+                window.decorView.systemUiVisibility = (
+                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                    )
             }
+        } catch (_: Throwable) { }
+    }
+
+    private fun hasBlePermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
         } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                    or View.SYSTEM_UI_FLAG_FULLSCREEN
-                    or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                    or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                    or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                )
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
         }
     }
 
     private fun requestAllPermissions() {
-        val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            perms.add(Manifest.permission.BLUETOOTH_SCAN)
-            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            perms.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        val missing = perms.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), 101)
+        try {
+            val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                perms.add(Manifest.permission.BLUETOOTH_SCAN)
+                perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+            } else {
+                perms.add(Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+            val missing = perms.filter {
+                ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missing.isNotEmpty()) {
+                ActivityCompat.requestPermissions(this, missing.toTypedArray(), 101)
+            }
+        } catch (_: Throwable) { }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 101 && hasBlePermission() && !bleScanStarted) {
+            startBleThermometerScan()
         }
     }
 
     override fun onInit(status: Int) {
         if (status == TextToSpeech.SUCCESS) {
-            tts?.language = Locale("tr", "TR")
-            tts?.setSpeechRate(1.05f)
+            try {
+                tts?.language = Locale("tr", "TR")
+                tts?.setSpeechRate(1.05f)
+            } catch (_: Throwable) { }
         }
     }
 
     private fun speak(text: String, resumeWakeAfter: Boolean = true) {
         isSpeaking = true
         mainHandler.post {
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "panel_tts")
+            try {
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "panel_tts")
+            } catch (_: Throwable) { }
             val delayMs = (text.length * 65L).coerceIn(1500L, 12000L)
             mainHandler.postDelayed({
                 isSpeaking = false
@@ -153,49 +223,57 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     private fun jsCall(script: String) {
         mainHandler.post {
-            webView.evaluateJavascript(script, null)
+            try {
+                webView?.evaluateJavascript(script, null)
+            } catch (_: Throwable) { }
         }
     }
 
     // ==================== BLE TERMOMETRE (LYWSD03MMC) ====================
     @SuppressLint("MissingPermission")
     private fun startBleThermometerScan() {
-        val scanner = bluetoothAdapter?.bluetoothLeScanner ?: return
+        if (!hasBlePermission()) return
+        val adapter = bluetoothAdapter ?: return
+        if (!adapter.isEnabled) return
+        val scanner = adapter.bluetoothLeScanner ?: return
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
             .build()
         try {
+            bleScanStarted = true
             scanner.startScan(null, settings, object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
-                    val device = result.device ?: return
-                    val record = result.scanRecord ?: return
-                    val name = record.deviceName ?: device.name ?: ""
-                    val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
-                    val targetMac = prefs.getString("thermo_mac", "")?.trim()?.uppercase() ?: ""
+                    try {
+                        val device = result.device ?: return
+                        val record = result.scanRecord ?: return
+                        val name = record.deviceName ?: device.name ?: ""
+                        val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+                        val targetMac = prefs.getString("thermo_mac", "")?.trim()?.uppercase() ?: ""
 
-                    val matchesMac = targetMac.isNotEmpty() && device.address.equals(targetMac, ignoreCase = true)
-                    val matchesName = name.startsWith("ATC_") || name.contains("LYWSD03MMC", ignoreCase = true)
-                    if (!matchesMac && !matchesName) return
+                        val matchesMac = targetMac.isNotEmpty() && device.address.equals(targetMac, ignoreCase = true)
+                        val matchesName = name.startsWith("ATC_") || name.contains("LYWSD03MMC", ignoreCase = true)
+                        if (!matchesMac && !matchesName) return
 
-                    record.serviceData?.forEach { (uuid, data) ->
-                        if (uuid.uuid.toString().startsWith("0000181a")) {
-                            parseAtcOrPvvx(data)
+                        record.serviceData?.forEach { (uuid, data) ->
+                            if (uuid.uuid.toString().startsWith("0000181a")) {
+                                parseAtcOrPvvx(data)
+                            }
                         }
-                    }
+                    } catch (_: Throwable) { }
                 }
             })
-        } catch (_: Exception) { }
+        } catch (_: Throwable) {
+            bleScanStarted = false
+        }
     }
 
     private fun parseAtcOrPvvx(data: ByteArray) {
         if (data.size == 13) {
-            // ATC1441 format
             val tempRaw = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
             val temp = tempRaw.toShort() / 10.0
             val hum = data[8].toInt() and 0xFF
             jsCall("window.onThermoUpdate && window.onThermoUpdate(${String.format(Locale.US, "%.1f", temp)}, $hum)")
         } else if (data.size >= 15) {
-            // PVVX format
             val tempRaw = ((data[7].toInt() and 0xFF) shl 8) or (data[6].toInt() and 0xFF)
             val humRaw = ((data[9].toInt() and 0xFF) shl 8) or (data[8].toInt() and 0xFF)
             val temp = tempRaw.toShort() / 100.0
@@ -207,6 +285,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     // ==================== MOHUANLED (BJ_LED / ELK-BLEDOM BLE) ====================
     @SuppressLint("MissingPermission")
     private fun sendMohuanLedCommand(mac: String, payload: ByteArray) {
+        if (!hasBlePermission()) return
         scope.launch {
             try {
                 if (bleGatt != null && bleWriteChar != null) {
@@ -238,21 +317,23 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         }
                     }
                 })
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun writeCharacteristicCompat(gatt: BluetoothGatt, ch: BluetoothGattCharacteristic, data: ByteArray) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            gatt.writeCharacteristic(ch, data, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
-        } else {
-            @Suppress("DEPRECATION")
-            ch.value = data
-            ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-            @Suppress("DEPRECATION")
-            gatt.writeCharacteristic(ch)
-        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                gatt.writeCharacteristic(ch, data, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE)
+            } else {
+                @Suppress("DEPRECATION")
+                ch.value = data
+                ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                @Suppress("DEPRECATION")
+                gatt.writeCharacteristic(ch)
+            }
+        } catch (_: Throwable) { }
     }
 
     // ==================== XIAOMI BULB 1S (YEELIGHT LAN + MIIO TOKEN) ====================
@@ -267,12 +348,12 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     socket.getOutputStream().flush()
                     yeelightOk = true
                 }
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
 
             if (!yeelightOk && tokenHex.length == 32) {
                 try {
                     sendMiioUdpCommand(ip, tokenHex, method, paramsJson)
-                } catch (_: Exception) { }
+                } catch (_: Throwable) { }
             }
         }
     }
@@ -321,18 +402,20 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
     // ==================== KIZILÖTESİ (NEC IR) ====================
     private fun transmitNecIr(address: Int, command: Int) {
-        val ir = irManager ?: return
-        if (!ir.hasIrEmitter()) return
-        val pattern = mutableListOf(9000, 4500)
-        val bytes = intArrayOf(address and 0xFF, (address.inv()) and 0xFF, command and 0xFF, (command.inv()) and 0xFF)
-        for (b in bytes) {
-            for (bit in 0 until 8) {
-                pattern.add(560)
-                pattern.add(if (((b shr bit) and 1) == 1) 1690 else 560)
+        try {
+            val ir = irManager ?: return
+            if (!ir.hasIrEmitter()) return
+            val pattern = mutableListOf(9000, 4500)
+            val bytes = intArrayOf(address and 0xFF, (address.inv()) and 0xFF, command and 0xFF, (command.inv()) and 0xFF)
+            for (b in bytes) {
+                for (bit in 0 until 8) {
+                    pattern.add(560)
+                    pattern.add(if (((b shr bit) and 1) == 1) 1690 else 560)
+                }
             }
-        }
-        pattern.add(560)
-        ir.transmit(38000, pattern.toIntArray())
+            pattern.add(560)
+            ir.transmit(38000, pattern.toIntArray())
+        } catch (_: Throwable) { }
     }
 
     // ==================== WAKE-ON-LAN (PC AÇMA) ====================
@@ -352,7 +435,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     socket.send(DatagramPacket(packetBytes, packetBytes.size, broadcastAddr, 9))
                     socket.send(DatagramPacket(packetBytes, packetBytes.size, broadcastAddr, 7))
                 }
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
         }
     }
 
@@ -368,7 +451,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     writeAdbPacket(out, 0x4e584e43, 0x01000000, 4096, "host::\u0000".toByteArray())
                     var msg = readAdbPacket(inp)
 
-                    if (msg.cmd == 0x48545541) { // A_AUTH
+                    if (msg.cmd == 0x48545541) {
                         val sig = Signature.getInstance("SHA1withRSA")
                         sig.initSign(adbKeyPair.private)
                         sig.update(msg.payload)
@@ -383,14 +466,14 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                         }
                     }
 
-                    if (msg.cmd == 0x4e584e43) { // Connected
+                    if (msg.cmd == 0x4e584e43) {
                         val dest = "shell:$shellCmd\u0000".toByteArray()
-                        writeAdbPacket(out, 0x4e45504f, 1, 0, dest) // A_OPEN
+                        writeAdbPacket(out, 0x4e45504f, 1, 0, dest)
                         readAdbPacket(inp)
-                        writeAdbPacket(out, 0x45534c43, 1, 1, ByteArray(0)) // A_CLSE
+                        writeAdbPacket(out, 0x45534c43, 1, 1, ByteArray(0))
                     }
                 }
-            } catch (_: Exception) { }
+            } catch (_: Throwable) { }
         }
     }
 
@@ -483,7 +566,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                                 speechRecognizer?.cancel()
                                 try {
                                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85).startTone(ToneGenerator.TONE_PROP_BEEP, 150)
-                                } catch (_: Exception) { }
+                                } catch (_: Throwable) { }
                                 mainHandler.postDelayed({ startListeningCycle(directCommand = true) }, 250)
                             }
                         }
@@ -512,7 +595,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                             } else {
                                 try {
                                     ToneGenerator(AudioManager.STREAM_NOTIFICATION, 85).startTone(ToneGenerator.TONE_PROP_BEEP, 150)
-                                } catch (_: Exception) { }
+                                } catch (_: Throwable) { }
                                 startListeningCycle(directCommand = true)
                             }
                         } else if (continuousWakeMode) {
@@ -531,7 +614,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
                     override fun onEvent(eventType: Int, params: Bundle?) {}
                 })
                 speechRecognizer?.startListening(intent)
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 jsCall("window.onVoiceState && window.onVoiceState('idle')")
             }
         }
@@ -542,7 +625,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         jsCall("window.onVoiceState && window.onVoiceState('thinking')")
 
         val q = query.lowercase(Locale("tr", "TR"))
-        // 1) Yerel Akıllı Ev Komutları
         when {
             q.contains("ışıkları aç") || q.contains("tümünü aç") || q.contains("aydınlat") -> {
                 jsCall("window.triggerScene && window.triggerScene('bright')")
@@ -574,7 +656,6 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             }
         }
 
-        // 2) Gemini AI Soru-Cevap
         val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
         val apiKey = prefs.getString("gemini_key", "")?.trim() ?: ""
         if (apiKey.isEmpty()) {
@@ -620,7 +701,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
 
                 jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(answer)}, 'ai')")
                 speak(answer)
-            } catch (e: Exception) {
+            } catch (_: Throwable) {
                 val err = "Şu an bağlantıda bir sorun oluştu."
                 jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(err)}, 'ai')")
                 speak(err)
@@ -643,26 +724,34 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     inner class PanelBridge {
         @JavascriptInterface
         fun saveConfig(jsonStr: String) {
-            val obj = JSONObject(jsonStr)
-            val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE).edit()
-            obj.keys().forEach { k -> prefs.putString(k, obj.optString(k)) }
-            prefs.apply()
+            try {
+                val obj = JSONObject(jsonStr)
+                val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE).edit()
+                obj.keys().forEach { k -> prefs.putString(k, obj.optString(k)) }
+                prefs.apply()
+            } catch (_: Throwable) { }
         }
 
         @JavascriptInterface
         fun loadConfig(): String {
-            val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
-            val obj = JSONObject()
-            prefs.all.forEach { (k, v) -> obj.put(k, v?.toString() ?: "") }
-            return obj.toString()
+            return try {
+                val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+                val obj = JSONObject()
+                prefs.all.forEach { (k, v) -> obj.put(k, v?.toString() ?: "") }
+                obj.toString()
+            } catch (_: Throwable) {
+                "{}"
+            }
         }
 
         @JavascriptInterface
         fun setBrightness(level: Float) {
             mainHandler.post {
-                val lp = window.attributes
-                lp.screenBrightness = level.coerceIn(0.01f, 1.0f)
-                window.attributes = lp
+                try {
+                    val lp = window.attributes
+                    lp.screenBrightness = level.coerceIn(0.01f, 1.0f)
+                    window.attributes = lp
+                } catch (_: Throwable) { }
             }
         }
 
@@ -706,7 +795,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             continuousWakeMode = enabled
             if (enabled) startListeningCycle(directCommand = false)
             else mainHandler.post {
-                speechRecognizer?.cancel()
+                try { speechRecognizer?.cancel() } catch (_: Throwable) { }
                 jsCall("window.onVoiceState && window.onVoiceState('idle')")
             }
         }
@@ -720,7 +809,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
-        tts?.shutdown()
-        speechRecognizer?.destroy()
+        try { tts?.shutdown() } catch (_: Throwable) { }
+        try { speechRecognizer?.destroy() } catch (_: Throwable) { }
     }
 }
