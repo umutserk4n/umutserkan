@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>Akıllı Oda Paneli</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --card: #141923;
+    --card-border: #222a3a;
+    --accent: #3b82f6;
+    --accent-glow: rgba(59, 130, 246, 0.25);
+    --green: #10b981;
+    --purple: #8b5cf6;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-tap-highlight-color: transparent; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    padding: 12px 16px;
+    gap: 12px;
+  }
+  /* ÜST BAR */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 16px;
+    padding: 10px 18px;
+    height: 68px;
+  }
+  .clock-box { display: flex; align-items: baseline; gap: 14px; }
+  .clock { font-size: 34px; font-weight: 700; letter-spacing: 1px; font-variant-numeric: tabular-nums; }
+  .date { font-size: 14px; color: var(--muted); }
+  .env-group { display: flex; gap: 16px; align-items: center; }
+  .pill {
+    background: #1b2230;
+    border: 1px solid #2a3447;
+    padding: 6px 14px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+  .pill strong { font-size: 16px; color: #fff; }
+  .top-actions { display: flex; gap: 10px; align-items: center; }
+  .icon-btn {
+    background: #1e2636;
+    border: 1px solid #2e3a52;
+    color: var(--text);
+    height: 44px;
+    padding: 0 14px;
+    border-radius: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .icon-btn:active { transform: scale(0.96); }
+  .icon-btn.listening { background: #dc2626; border-color: #f87171; animation: pulse 1.2s infinite; }
+  .icon-btn.standby { border-color: var(--green); color: #6ee7b7; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.65; } }
+
+  /* ANA IZGARA */
+  .grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1.15fr 1fr 1.1fr;
+    gap: 12px;
+    min-height: 0;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--card-border);
+    border-radius: 18px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .card-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--muted);
+    font-weight: 700;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .btn-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .btn-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .btn {
+    background: #1b2332;
+    border: 1px solid #293449;
+    color: var(--text);
+    border-radius: 12px;
+    padding: 11px 8px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    text-align: center;
+    transition: 0.12s;
+  }
+  .btn:active { transform: scale(0.95); background: #263147; }
+  .btn.primary { background: rgba(59,130,246,0.18); border-color: #3b82f6; color: #93c5fd; }
+  .btn.danger { background: rgba(239,68,68,0.16); border-color: #ef4444; color: #fca5a5; }
+  .btn.purple { background: rgba(139,92,246,0.18); border-color: #8b5cf6; color: #c4b5fd; }
+  .btn.green { background: rgba(16,185,129,0.18); border-color: #10b981; color: #6ee7b7; }
+
+  .swatches { display: flex; gap: 8px; justify-content: space-between; }
+  .swatch {
+    flex: 1; height: 32px; border-radius: 10px; border: 2px solid rgba(255,255,255,0.15); cursor: pointer;
+  }
+  .swatch:active { transform: scale(0.92); }
+  input[type=range] { width: 100%; accent-color: var(--accent); height: 6px; }
+
+  /* D-PAD */
+  .dpad {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 7px;
+    margin: auto 0;
+  }
+  .dpad .btn { padding: 14px 6px; font-size: 15px; }
+  .dpad .ok { background: var(--accent); color: #fff; border-color: #60a5fa; }
+
+  /* SESLİ ASİSTAN BANNER */
+  .voice-bar {
+    background: #111622;
+    border: 1px solid #242f44;
+    border-radius: 12px;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: #cbd5e1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 38px;
+  }
+
+  /* GECE KARARTMA OVERLAY */
+  #nightOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: #000000;
+    z-index: 900;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+  }
+  #nightOverlay .n-time { font-size: 84px; font-weight: 200; color: #334155; letter-spacing: 3px; }
+  #nightOverlay .n-info { font-size: 18px; color: #1e293b; }
+
+  /* AYARLAR MODAL */
+  #settingsModal {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.82);
+    z-index: 950;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-box {
+    background: #141923;
+    border: 1px solid #2d384d;
+    border-radius: 18px;
+    width: 88%;
+    max-width: 720px;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 12px; color: var(--muted); }
+  .field input {
+    background: #0d1118;
+    border: 1px solid #2b3548;
+    color: #fff;
+    padding: 8px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+  <!-- ÜST BAR -->
+  <div class="topbar">
+    <div class="clock-box">
+      <div class="clock" id="clock">00:00</div>
+      <div class="date" id="date">Yükleniyor...</div>
+    </div>
+
+    <div class="env-group">
+      <div class="pill">🏠 Oda: <strong id="indoorTemp">--°C</strong> <span id="indoorHum">--%</span></div>
+      <div class="pill">🌤️ Erenler: <strong id="outdoorTemp">--°C</strong></div>
+    </div>
+
+    <div class="top-actions">
+      <button class="icon-btn" id="wakeToggleBtn" onclick="toggleContinuousWake()">👂 Jarvis: Kapalı</button>
+      <button class="icon-btn" id="micBtn" onclick="triggerVoice()">🎙️ Sor</button>
+      <button class="icon-btn" onclick="openSettings()">⚙️</button>
+    </div>
+  </div>
+
+  <!-- ANA 3 SÜTUN -->
+  <div class="grid">
+    <!-- SÜTUN 1: SENARYOLAR & PC -->
+    <div class="card">
+      <div class="card-title">Hızlı Modlar & Sistem</div>
+      <div class="btn-grid-2">
+        <button class="btn primary" onclick="triggerScene('bright')">☀️ Tüm LED'leri Aç</button>
+        <button class="btn danger" onclick="triggerScene('off')">🌙 Tümünü Kapat</button>
+        <button class="btn purple" onclick="triggerScene('cinema')">🎬 Sinema Modu</button>
+        <button class="btn green" onclick="wakePc()">🖥️ PC'yi Aç (WoL)</button>
+      </div>
+
+      <div class="card-title" style="margin-top:4px;">Kumandalı Şerit LED (Kızılötesi)</div>
+      <div class="btn-grid-3">
+        <button class="btn" onclick="irCmd(0x40)">IR Aç</button>
+        <button class="btn" onclick="irCmd(0x41)">IR Kapat</button>
+        <button class="btn" onclick="irCmd(0x44)">Beyaz</button>
+        <button class="btn" onclick="irCmd(0x58)">Kırmızı</button>
+        <button class="btn" onclick="irCmd(0x59)">Yeşil</button>
+        <button class="btn" onclick="irCmd(0x45)">Mavi</button>
+      </div>
+    </div>
+
+    <!-- SÜTUN 2: XIAOMI AMPUL 1S & MOHUANLED -->
+    <div class="card">
+      <div class="card-title">Xiaomi Ampul 1S (Wi-Fi)</div>
+      <div class="btn-grid-2">
+        <button class="btn primary" onclick="bulbPower(true)">Ampul Aç</button>
+        <button class="btn" onclick="bulbPower(false)">Ampul Kapat</button>
+      </div>
+      <input type="range" min="5" max="100" value="80" onchange="bulbBright(this.value)" />
+      <div class="swatches">
+        <div class="swatch" style="background:#ffffff;" onclick="bulbTemp(4500)"></div>
+        <div class="swatch" style="background:#ffedd5;" onclick="bulbTemp(2700)"></div>
+        <div class="swatch" style="background:#ef4444;" onclick="bulbRgb(255,30,30)"></div>
+        <div class="swatch" style="background:#3b82f6;" onclick="bulbRgb(30,100,255)"></div>
+        <div class="swatch" style="background:#a855f7;" onclick="bulbRgb(168,85,247)"></div>
+      </div>
+
+      <div class="card-title" style="margin-top:4px;">MohuanLED Şerit (Bluetooth)</div>
+      <div class="btn-grid-2">
+        <button class="btn primary" onclick="mohuanPower(true)">LED Aç</button>
+        <button class="btn" onclick="mohuanPower(false)">LED Kapat</button>
+      </div>
+      <div class="swatches">
+        <div class="swatch" style="background:#ffffff;" onclick="mohuanRgb(255,255,255)"></div>
+        <div class="swatch" style="background:#ef4444;" onclick="mohuanRgb(255,0,0)"></div>
+        <div class="swatch" style="background:#10b981;" onclick="mohuanRgb(0,255,80)"></div>
+        <div class="swatch" style="background:#06b6d4;" onclick="mohuanRgb(0,220,255)"></div>
+        <div class="swatch" style="background:#8b5cf6;" onclick="mohuanRgb(150,0,255)"></div>
+      </div>
+    </div>
+
+    <!-- SÜTUN 3: FIRE TV STICK 4K MAX -->
+    <div class="card">
+      <div class="card-title">Fire TV Stick 4K Max</div>
+      <div class="dpad">
+        <button class="btn" onclick="ftvKey(4)">↩ Geri</button>
+        <button class="btn" onclick="ftvKey(19)">▲</button>
+        <button class="btn" onclick="ftvKey(3)">⌂ Ana</button>
+        <button class="btn" onclick="ftvKey(21)">◀</button>
+        <button class="btn ok" onclick="ftvKey(23)">OK</button>
+        <button class="btn" onclick="ftvKey(22)">▶</button>
+        <button class="btn" onclick="ftvKey(85)">⏯ Oynat</button>
+        <button class="btn" onclick="ftvKey(20)">▼</button>
+        <button class="btn" onclick="ftvKey(82)">☰ Menü</button>
+      </div>
+      <div class="btn-grid-2">
+        <button class="btn danger" onclick="ftvApp('com.amazon.firetv.youtube')">▶ YouTube</button>
+        <button class="btn primary" onclick="ftvApp('com.netflix.ninja')">🎬 Netflix</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ALT SESLİ ASİSTAN ÇUBUĞU -->
+  <div class="voice-bar">
+    <span id="voiceLog">🎙️ "Jarvis" diyerek veya sağ üstteki Sor tuşuna basarak konuşabilirsin.</span>
+    <span style="color:var(--muted); font-size:12px;" id="nightInfo">Gece Modu: 03:00 - 10:00</span>
+  </div>
+
+  <!-- AKILLI GECE KARARTMA EKRANI -->
+  <div id="nightOverlay" onclick="wakeFromNightTemporarily()">
+    <div class="n-time" id="nightClock">03:00</div>
+    <div class="n-info" id="nightEnv">Erenler --°C • Oda --°C • Ekrana dokun</div>
+  </div>
+
+  <!-- AYARLAR MODAL -->
+  <div id="settingsModal">
+    <div class="modal-box">
+      <div class="card-title">Panel Ayarları (Kaydettiğin Anda Aktif Olur)</div>
+      <div class="form-grid">
+        <div class="field"><label>Fire TV Stick IP Adresi</label><input id="cfg_ftv_ip" placeholder="192.168.1.50" /></div>
+        <div class="field"><label>Xiaomi Ampul 1S IP Adresi</label><input id="cfg_bulb_ip" placeholder="192.168.1.51" /></div>
+        <div class="field"><label>Xiaomi Ampul Token (32 hane - opsiyonel)</label><input id="cfg_bulb_token" placeholder="Yeelight LAN açıksa boş bırak" /></div>
+        <div class="field"><label>MohuanLED Bluetooth MAC</label><input id="cfg_mohuan_mac" placeholder="AA:BB:CC:11:22:33" /></div>
+        <div class="field"><label>Xiaomi Termometre MAC (opsiyonel)</label><input id="cfg_thermo_mac" placeholder="A4:C1:38:XX:XX:XX" /></div>
+        <div class="field"><label>PC MAC Adresi (Wake-on-LAN)</label><input id="cfg_pc_mac" placeholder="D8:5E:D3:XX:XX:XX" /></div>
+        <div class="field"><label>Gece Karartma Başlangıç (HH:MM)</label><input id="cfg_night_start" value="03:00" /></div>
+        <div class="field"><label>Gece Karartma Bitiş (HH:MM)</label><input id="cfg_night_end" value="10:00" /></div>
+        <div class="field"><label>Sesli Uyanma Kelimesi</label><input id="cfg_wake_word" value="jarvis" /></div>
+        <div class="field"><label>Ücretsiz Gemini API Anahtarı</label><input id="cfg_gemini_key" type="password" placeholder="AIzaSy..." /></div>
+      </div>
+      <div class="btn-grid-2" style="margin-top:6px;">
+        <button class="btn primary" onclick="saveSettings()">Kaydet ve Kapat</button>
+        <button class="btn" onclick="closeSettings()">İptal</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  let cfg = {
+    ftv_ip: "", bulb_ip: "", bulb_token: "", mohuan_mac: "",
+    thermo_mac: "", pc_mac: "", night_start: "03:00", night_end: "10:00",
+    wake_word: "jarvis", gemini_key: ""
+  };
+  let alwaysListen = false;
+  let tempWakeUntil = 0;
+
+  function loadAllConfig() {
+    if (window.AndroidBridge) {
+      try {
+        const saved = JSON.parse(AndroidBridge.loadConfig());
+        cfg = { ...cfg, ...saved };
+      } catch (e) {}
+    }
+    document.getElementById("nightInfo").innerText = `Gece Modu: ${cfg.night_start} - ${cfg.night_end}`;
+  }
+
+  function openSettings() {
+    Object.keys(cfg).forEach(k => {
+      const el = document.getElementById("cfg_" + k);
+      if (el) el.value = cfg[k] || "";
+    });
+    document.getElementById("settingsModal").style.display = "flex";
+  }
+  function closeSettings() { document.getElementById("settingsModal").style.display = "none"; }
+  function saveSettings() {
+    Object.keys(cfg).forEach(k => {
+      const el = document.getElementById("cfg_" + k);
+      if (el) cfg[k] = el.value.trim();
+    });
+    if (window.AndroidBridge) AndroidBridge.saveConfig(JSON.stringify(cfg));
+    document.getElementById("nightInfo").innerText = `Gece Modu: ${cfg.night_start} - ${cfg.night_end}`;
+    closeSettings();
+  }
+
+  // SAAT & GECE KARARTMASI
+  function updateClock() {
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const timeStr = `${hh}:${mm}`;
+    document.getElementById("clock").innerText = timeStr;
+    document.getElementById("nightClock").innerText = timeStr;
+    document.getElementById("date").innerText = now.toLocaleDateString("tr-TR", {
+      weekday: "long", day: "numeric", month: "long"
+    });
+    checkNightMode(hh + ":" + mm);
+  }
+
+  function toMinutes(hhmm) {
+    const [h, m] = (hhmm || "00:00").split(":").map(Number);
+    return (h || 0) * 60 + (m || 0);
+  }
+
+  function checkNightMode(nowStr) {
+    if (Date.now() < tempWakeUntil) return;
+    const cur = toMinutes(nowStr);
+    const start = toMinutes(cfg.night_start);
+    const end = toMinutes(cfg.night_end);
+    const isNight = start <= end ? (cur >= start && cur < end) : (cur >= start || cur < end);
+
+    const overlay = document.getElementById("nightOverlay");
+    if (isNight) {
+      overlay.style.display = "flex";
+      if (window.AndroidBridge) AndroidBridge.setBrightness(0.02);
+    } else {
+      overlay.style.display = "none";
+      if (window.AndroidBridge) AndroidBridge.setBrightness(0.75);
+    }
+  }
+
+  function wakeFromNightTemporarily() {
+    tempWakeUntil = Date.now() + 30000;
+    document.getElementById("nightOverlay").style.display = "none";
+    if (window.AndroidBridge) AndroidBridge.setBrightness(0.65);
+  }
+
+  // ERENLER, SAKARYA HAVA DURUMU (OPEN-METEO)
+  async function fetchWeather() {
+    try {
+      const r = await fetch("https://api.open-meteo.com/v1/forecast?latitude=40.7575&longitude=30.4017&current=temperature_2m&timezone=Europe%2FIstanbul");
+      const d = await r.json();
+      const t = Math.round(d.current.temperature_2m);
+      document.getElementById("outdoorTemp").innerText = `${t}°C`;
+      syncNightSummary();
+    } catch (e) {}
+  }
+
+  window.onThermoUpdate = function(temp, hum) {
+    document.getElementById("indoorTemp").innerText = `${temp}°C`;
+    document.getElementById("indoorHum").innerText = `%${hum}`;
+    syncNightSummary();
+  };
+
+  function syncNightSummary() {
+    const outT = document.getElementById("outdoorTemp").innerText;
+    const inT = document.getElementById("indoorTemp").innerText;
+    document.getElementById("nightEnv").innerText = `Erenler ${outT} • Oda ${inT} • Uyandırmak için dokun`;
+  }
+
+  // CİHAZ KONTROLLERİ
+  function bulbPower(on) {
+    if (window.AndroidBridge) AndroidBridge.controlXiaomiBulb(cfg.bulb_ip, cfg.bulb_token, "set_power", `["${on ? "on" : "off"}","smooth",300]`);
+  }
+  function bulbBright(val) {
+    if (window.AndroidBridge) AndroidBridge.controlXiaomiBulb(cfg.bulb_ip, cfg.bulb_token, "set_bright", `[${Number(val)},"smooth",200]`);
+  }
+  function bulbTemp(k) {
+    if (window.AndroidBridge) AndroidBridge.controlXiaomiBulb(cfg.bulb_ip, cfg.bulb_token, "set_ct_abx", `[${k},"smooth",300]`);
+  }
+  function bulbRgb(r, g, b) {
+    const rgb = (r << 16) + (g << 8) + b;
+    if (window.AndroidBridge) AndroidBridge.controlXiaomiBulb(cfg.bulb_ip, cfg.bulb_token, "set_rgb", `[${rgb},"smooth",300]`);
+  }
+
+  function hex2(n) { return Number(n).toString(16).padStart(2, "0"); }
+  function mohuanPower(on) {
+    if (window.AndroidBridge) AndroidBridge.controlMohuanLed(cfg.mohuan_mac, on ? "6996020101" : "6996020100");
+  }
+  function mohuanRgb(r, g, b) {
+    if (window.AndroidBridge) AndroidBridge.controlMohuanLed(cfg.mohuan_mac, "69960502" + hex2(r) + hex2(g) + hex2(b));
+  }
+
+  function irCmd(cmd) { if (window.AndroidBridge) AndroidBridge.sendIr(0x00, cmd); }
+  function ftvKey(code) { if (window.AndroidBridge) AndroidBridge.fireTvKey(cfg.ftv_ip, code); }
+  function ftvApp(pkg) { if (window.AndroidBridge) AndroidBridge.fireTvApp(cfg.ftv_ip, pkg); }
+  window.wakePc = function() { if (window.AndroidBridge) AndroidBridge.wakePc(cfg.pc_mac); };
+
+  // SENARYOLAR (TEK TUŞ TÜM LED'LER)
+  window.triggerScene = function(mode) {
+    if (mode === "bright") {
+      bulbPower(true); setTimeout(() => { bulbTemp(4500); bulbBright(100); }, 250);
+      mohuanPower(true); setTimeout(() => mohuanRgb(255, 255, 255), 350);
+      irCmd(0x40); setTimeout(() => irCmd(0x44), 250);
+    } else if (mode === "off") {
+      bulbPower(false);
+      mohuanPower(false);
+      irCmd(0x41);
+    } else if (mode === "cinema") {
+      bulbPower(false);
+      mohuanPower(true); setTimeout(() => mohuanRgb(140, 0, 255), 350);
+      irCmd(0x40); setTimeout(() => irCmd(0x45), 250);
+    }
+  };
+
+  // SESLİ ASİSTAN UI
+  function triggerVoice() { if (window.AndroidBridge) AndroidBridge.triggerVoiceNow(); }
+  function toggleContinuousWake() {
+    alwaysListen = !alwaysListen;
+    const btn = document.getElementById("wakeToggleBtn");
+    btn.innerText = alwaysListen ? `👂 ${cfg.wake_word}: Açık` : `👂 ${cfg.wake_word}: Kapalı`;
+    btn.classList.toggle("standby", alwaysListen);
+    if (window.AndroidBridge) AndroidBridge.toggleAlwaysListen(alwaysListen);
+  }
+  window.onVoiceState = function(state) {
+    const mic = document.getElementById("micBtn");
+    mic.classList.toggle("listening", state === "listening");
+    if (state === "listening") document.getElementById("voiceLog").innerText = "🎙️ Dinliyorum...";
+    if (state === "thinking") document.getElementById("voiceLog").innerText = "⏳ Düşünüyorum...";
+  };
+  window.onVoiceText = function(txt, who) {
+    document.getElementById("voiceLog").innerText = (who === "user" ? "🗣️ " : "🤖 ") + txt;
+  };
+
+  loadAllConfig();
+  updateClock();
+  fetchWeather();
+  setInterval(updateClock, 5000);
+  setInterval(fetchWeather, 900000);
+</script>
+</body>
+</html>
