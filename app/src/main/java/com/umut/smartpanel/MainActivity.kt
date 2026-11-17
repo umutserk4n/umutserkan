@@ -42,11 +42,16 @@ import java.io.StringWriter
 import java.net.*
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.security.KeyFactory
+import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.interfaces.RSAPublicKey
+import java.security.spec.PKCS8EncodedKeySpec
+import java.security.spec.X509EncodedKeySpec
 import java.util.*
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -69,10 +74,36 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     private var awaitingCommandAfterWake = false
     private var isSpeaking = false
 
-    private val adbKeyPair by lazy {
+    // Kalıcı ADB bağlantısı ve RSA anahtarı
+    private val adbExecutor = Executors.newSingleThreadExecutor()
+    private var adbSocket: Socket? = null
+    private var adbConnectedIp: String = ""
+    private var adbStreamCounter = 1
+
+    private val adbKeyPair: KeyPair by lazy {
+        loadOrCreateAdbKeyPair()
+    }
+
+    private fun loadOrCreateAdbKeyPair(): KeyPair {
+        val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+        val privB64 = prefs.getString("adb_priv_key", null)
+        val pubB64 = prefs.getString("adb_pub_key", null)
+        if (!privB64.isNullOrEmpty() && !pubB64.isNullOrEmpty()) {
+            try {
+                val kf = KeyFactory.getInstance("RSA")
+                val priv = kf.generatePrivate(PKCS8EncodedKeySpec(Base64.getDecoder().decode(privB64)))
+                val pub = kf.generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(pubB64)))
+                return KeyPair(pub, priv)
+            } catch (_: Throwable) { }
+        }
         val kpg = KeyPairGenerator.getInstance("RSA")
         kpg.initialize(2048)
-        kpg.generateKeyPair()
+        val kp = kpg.generateKeyPair()
+        prefs.edit()
+            .putString("adb_priv_key", Base64.getEncoder().encodeToString(kp.private.encoded))
+            .putString("adb_pub_key", Base64.getEncoder().encodeToString(kp.public.encoded))
+            .apply()
+        return kp
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -119,7 +150,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
             webView = wv
             setContentView(wv)
         } catch (t: Throwable) {
-            showFallbackText("WebView Başlatılamadı (Ayarlar'dan Android System WebView'i etkinleştirin):\n\n${t.message}")
+            showFallbackText("WebView Başlatılamadı:\n\n${t.message}")
             return
         }
 
@@ -439,41 +470,97 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
     }
 
-    // ==================== FIRE TV STICK (ADB OVER TCP) ====================
-    private fun sendFireTvShell(ip: String, shellCmd: String) {
-        scope.launch {
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress(ip, 5555), 2000)
-                    val out = socket.getOutputStream()
-                    val inp = socket.getInputStream()
+    // ==================== FIRE TV STICK (KALICI ADB OVER TCP) ====================
+    private fun signAdbToken(token: ByteArray): ByteArray {
+        val sha1Prefix = byteArrayOf(
+            0x30, 0x21, 0x30, 0x09, 0x06, 0x05, 0x2b, 0x0e,
+            0x03, 0x02, 0x1a, 0x05, 0x00, 0x04, 0x14
+        )
+        val digestInfo = sha1Prefix + token
+        val sig = Signature.getInstance("NONEwithRSA")
+        sig.initSign(adbKeyPair.private)
+        sig.update(digestInfo)
+        return sig.sign()
+    }
 
-                    writeAdbPacket(out, 0x4e584e43, 0x01000000, 4096, "host::\u0000".toByteArray())
-                    var msg = readAdbPacket(inp)
+    private fun ensureAdbConnected(ip: String): Socket {
+        val existing = adbSocket
+        if (existing != null && existing.isConnected && !existing.isClosed && adbConnectedIp == ip) {
+            return existing
+        }
+        try { existing?.close() } catch (_: Throwable) { }
 
-                    if (msg.cmd == 0x48545541) {
-                        val sig = Signature.getInstance("SHA1withRSA")
-                        sig.initSign(adbKeyPair.private)
-                        sig.update(msg.payload)
-                        writeAdbPacket(out, 0x48545541, 2, 0, sig.sign())
-                        msg = readAdbPacket(inp)
+        val socket = Socket()
+        socket.tcpNoDelay = true
+        socket.connect(InetSocketAddress(ip, 5555), 2500)
+        socket.soTimeout = 15000
 
-                        if (msg.cmd == 0x48545541) {
-                            val pubKeyB64 = Base64.getEncoder().encodeToString(encodeAndroidRsaPubKey(adbKeyPair.public as RSAPublicKey))
-                            val pubPayload = "$pubKeyB64 smartpanel@mi6\u0000".toByteArray()
-                            writeAdbPacket(out, 0x48545541, 3, 0, pubPayload)
-                            msg = readAdbPacket(inp)
-                        }
-                    }
+        val out = socket.getOutputStream()
+        val inp = socket.getInputStream()
 
-                    if (msg.cmd == 0x4e584e43) {
-                        val dest = "shell:$shellCmd\u0000".toByteArray()
-                        writeAdbPacket(out, 0x4e45504f, 1, 0, dest)
-                        readAdbPacket(inp)
-                        writeAdbPacket(out, 0x45534c43, 1, 1, ByteArray(0))
-                    }
+        writeAdbPacket(out, 0x4e584e43, 0x01000000, 4096, "host::\u0000".toByteArray())
+        var msg = readAdbPacket(inp)
+
+        if (msg.cmd == 0x48545541) { // A_AUTH (TOKEN)
+            val signedToken = signAdbToken(msg.payload)
+            writeAdbPacket(out, 0x48545541, 2, 0, signedToken) // ADB_AUTH_SIGNATURE
+            msg = readAdbPacket(inp)
+
+            if (msg.cmd == 0x48545541) { // Henüz onaylanmamışsa açık anahtarı gönder
+                val pubKeyB64 = Base64.getEncoder().encodeToString(encodeAndroidRsaPubKey(adbKeyPair.public as RSAPublicKey))
+                val pubPayload = "$pubKeyB64 smartpanel@mi6\u0000".toByteArray()
+                writeAdbPacket(out, 0x48545541, 3, 0, pubPayload) // ADB_AUTH_RSAPUBLICKEY
+                msg = readAdbPacket(inp)
+            }
+        }
+
+        if (msg.cmd != 0x4e584e43) {
+            socket.close()
+            throw RuntimeException("ADB auth failed")
+        }
+
+        adbSocket = socket
+        adbConnectedIp = ip
+        adbStreamCounter = 1
+        return socket
+    }
+
+    private fun executeAdbShellOnSocket(socket: Socket, shellCmd: String) {
+        val out = socket.getOutputStream()
+        val inp = socket.getInputStream()
+        val localId = adbStreamCounter++
+        val dest = "shell:$shellCmd\u0000".toByteArray(Charsets.UTF_8)
+
+        socket.soTimeout = 2000
+        writeAdbPacket(out, 0x4e45504f, localId, 0, dest) // A_OPEN
+
+        while (true) {
+            val resp = readAdbPacket(inp)
+            when (resp.cmd) {
+                0x59414b4f -> continue // A_OKAY
+                0x45545257 -> writeAdbPacket(out, 0x59414b4f, localId, resp.arg0, ByteArray(0)) // A_WRTE -> A_OKAY
+                0x45534c43 -> { // A_CLSE
+                    writeAdbPacket(out, 0x45534c43, localId, resp.arg0, ByteArray(0))
+                    break
                 }
-            } catch (_: Throwable) { }
+                else -> break
+            }
+        }
+    }
+
+    private fun sendFireTvShell(ip: String, shellCmd: String) {
+        adbExecutor.execute {
+            try {
+                val sock = ensureAdbConnected(ip)
+                executeAdbShellOnSocket(sock, shellCmd)
+            } catch (_: Throwable) {
+                try { adbSocket?.close() } catch (_: Throwable) { }
+                adbSocket = null
+                try {
+                    val sock = ensureAdbConnected(ip)
+                    executeAdbShellOnSocket(sock, shellCmd)
+                } catch (_: Throwable) { }
+            }
         }
     }
 
@@ -809,6 +896,8 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         super.onDestroy()
         scope.cancel()
+        adbExecutor.shutdownNow()
+        try { adbSocket?.close() } catch (_: Throwable) { }
         try { tts?.shutdown() } catch (_: Throwable) { }
         try { speechRecognizer?.destroy() } catch (_: Throwable) { }
     }
