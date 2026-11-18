@@ -916,4 +916,11 @@ private fun sendIrCommand(pattern: IntArray) {
 fun sendIr(patternString: String) {
     val pattern = patternString.split(",").map { it.trim().toInt() }.toIntArray()
     sendIrCommand(pattern)
+}@JavascriptInterface
+fun irCmd(cmd: Int) {
+    // Kumanda tuşundan gelen hex koduna göre örnek IR sinyal dizisi (NEC protokolü)
+    val pattern = intArrayOf(9000, 4500, 560, 560, 560, 1690)
+    if (irManager?.hasIrEmitter() == true) {
+        irManager?.transmit(38000, pattern)
+    }
 }}
