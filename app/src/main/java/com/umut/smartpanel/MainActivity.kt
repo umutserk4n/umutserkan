@@ -902,3 +902,18 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try { speechRecognizer?.destroy() } catch (_: Throwable) { }
     }
 }
+override fun onCreate(savedInstanceState: android.os.Bundle?) {
+    super.onCreate(savedInstanceState)
+    irManager = getSystemService(CONSUMER_IR_SERVICE) as ConsumerIrManager?
+private fun sendIrCommand(pattern: IntArray) {
+    if (irManager?.hasIrEmitter() == true) {
+        // 38kHz standart kızılötesi frekansı ile sinyali gönderir
+        irManager?.transmit(38000, pattern)
+    }
+}
+
+@JavascriptInterface
+fun sendIr(patternString: String) {
+    val pattern = patternString.split(",").map { it.trim().toInt() }.toIntArray()
+    sendIrCommand(pattern)
+}}
