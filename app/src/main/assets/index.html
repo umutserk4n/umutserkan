@@ -245,6 +245,8 @@
         <button class="btn danger" onclick="triggerScene('off')">🌙 Tümünü Kapat</button>
         <button class="btn purple" onclick="triggerScene('cinema')">🎬 Sinema Modu</button>
         <button class="btn green" onclick="wakePc()">🖥️ PC'yi Aç</button>
+      <div class="card-title">Tapo P100 Priz</div>
+<button type="button" class="btn" onclick="toggleTapoPlug()">Priz Aç / Kapa</button>
       </div>
 
       <div class="card-title">Kumandalı Şerit LED (IR)</div>
@@ -438,7 +440,11 @@
     document.getElementById("indoorTemp").innerText = `${temp}°C`;
     document.getElementById("indoorHum").innerText = `%${hum}`;
     syncNightSummary();
-  };
+  function toggleTapoPlug() {
+    if (window.AndroidBridge && window.AndroidBridge.controlTapo) {
+        window.AndroidBridge.controlTapo();
+    }
+}};
 
   function syncNightSummary() {
     const outT = document.getElementById("outdoorTemp").innerText;
