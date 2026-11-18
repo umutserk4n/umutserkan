@@ -918,7 +918,7 @@ startBleScanner()
                     
                     // WebView üzerinde JavaScript fonksiyonunu tetikle
                     runOnUiThread {
-                        webView?.evaluateJavascript("updateSensorData('$temp', '$humidity')", null)
+                        webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
                     }
                 }
             }
