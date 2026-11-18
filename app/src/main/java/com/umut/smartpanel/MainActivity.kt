@@ -273,7 +273,20 @@ startBleScanner()
         try {
             bleScanStarted = true
             scanner.startScan(null, settings, object : ScanCallback() {
-                override fun onScanResult(callbackType: Int, result: ScanResult) {
+                override fun onScanResult(callbackType: Int, result: ScanResult) {val device = result.device
+val record = result.scanRecord
+if (device.address == "A4:C1:38:74:90:BD") {
+    val manufacturerData = record?.getManufacturerSpecificData(16877)
+    if (manufacturerData != null && manufacturerData.size >= 15) {
+        val tempRaw = ((manufacturerData[6].toInt() and 0xFF) shl 8) or (manufacturerData[7].toInt() and 0xFF)
+        val temp = tempRaw / 10.0
+        val humidity = manufacturerData[8].toInt() and 0xFF
+
+        runOnUiThread {
+            webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
+        }
+    }
+}
                     try {
                         val device = result.device ?: return
                         val record = result.scanRecord ?: return
