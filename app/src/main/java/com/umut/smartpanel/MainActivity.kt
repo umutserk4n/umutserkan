@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         }
 
         super.onCreate(savedInstanceState)
-
+startBleScanner()
         val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
         val lastCrash = prefs.getString("last_crash", null)
         if (!lastCrash.isNullOrEmpty()) {
@@ -901,4 +901,28 @@ class MainActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
         try { tts?.shutdown() } catch (_: Throwable) { }
         try { speechRecognizer?.destroy() } catch (_: Throwable) { }
     }
-}
+@SuppressLint("MissingPermission")
+    fun startBleScanner() {
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val bluetoothAdapter = bluetoothManager.adapter
+        val scanner = bluetoothAdapter?.bluetoothLeScanner
+
+        val scanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                if (result.device.address == "A4:C1:38:74:90:BD") {
+                    // ATC termometrenin reklam paketindeki ham verisi
+                    val rssi = result.rssi
+                    // Örnek olarak sıcaklık ve nemi doğrudan web paneline yolluyoruz
+                    val temp = "23.5"
+                    val humidity = "45"
+                    
+                    // WebView üzerinde JavaScript fonksiyonunu tetikle
+                    runOnUiThread {
+                        webView?.evaluateJavascript("updateSensorData('$temp', '$humidity')", null)
+                    }
+                }
+            }
+        }
+
+        scanner?.startScan(scanCallback)
+    }}
