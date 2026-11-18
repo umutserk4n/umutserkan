@@ -913,6 +913,7 @@ if (device.address == "A4:C1:38:74:90:BD") {
         try { tts?.shutdown() } catch (_: Throwable) { }
         try { speechRecognizer?.destroy() } catch (_: Throwable) { }
     }
+}
 @SuppressLint("MissingPermission")
 fun startBlescanner() {
     val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
