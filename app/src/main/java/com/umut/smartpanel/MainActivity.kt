@@ -916,9 +916,9 @@ if (manufacturerData != null && manufacturerData.size >= 15) {
     val humidity = manufacturerData[8].toInt() and 0xFF
 
     // WebView üzerinden JavaScript fonksiyonunu tetikle
-    runOnUiThr {
-        webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
-    }
+runOnUiThread {
+    webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
+}
 }
                     }
                 }
