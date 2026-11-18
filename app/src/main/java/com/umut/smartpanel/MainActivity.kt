@@ -907,18 +907,19 @@ startBleScanner()
         val bluetoothAdapter = bluetoothManager.adapter
         val scanner = bluetoothAdapter?.bluetoothLeScanner
 
-        val scanCallback = object : ScanCallback() {
-            override fun onScanResult(callbackType: Int, result: ScanResult) {
-                if (result.device.address == "A4:C1:38:74:90:BD") {
-                    // ATC termometrenin reklam paketindeki ham verisi
-                    val rssi = result.rssi
-                    // Örnek olarak sıcaklık ve nemi doğrudan web paneline yolluyoruz
-                    val temp = "23.5"
-                    val humidity = "45"
-                    
-                    // WebView üzerinde JavaScript fonksiyonunu tetikle
-                    runOnUiThread {
-                        webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
+val scanRecord = result.scanRecord
+val manufacturerData = scanRecord?.getManufacturerSpecificData(16877) // ATC format ID veya standart UUID
+if (manufacturerData != null && manufacturerData.size >= 15) {
+    // Ham veriden sıcaklık ve nem baytlarını çekme
+    val tempRaw = ((manufacturerData[6].toInt() and 0xFF) shl 8) or (manufacturerData[7].toInt() and 0xFF)
+    val temp = tempRaw / 10.0
+    val humidity = manufacturerData[8].toInt() and 0xFF
+
+    // WebView üzerinden JavaScript fonksiyonunu tetikle
+    runOnUiThr {
+        webView?.evaluateJavascript("window.onThermoUpdate('$temp', '$humidity')", null)
+    }
+}
                     }
                 }
             }
