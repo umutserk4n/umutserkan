@@ -46,6 +46,7 @@ import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
+import java.security.SecureRandom
 import java.security.Signature
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.PKCS8EncodedKeySpec
@@ -443,24 +444,6 @@ if (device.address == "A4:C1:38:74:90:BD") {
         }
     }
 
-    // ==================== KIZILÖTESİ (NEC IR) ====================
-    private fun transmitNecIr(address: Int, command: Int) {
-        try {
-            val ir = irManager ?: return
-            if (!ir.hasIrEmitter()) return
-            val pattern = mutableListOf(9000, 4500)
-            val bytes = intArrayOf(address and 0xFF, (address.inv()) and 0xFF, command and 0xFF, (command.inv()) and 0xFF)
-            for (b in bytes) {
-                for (bit in 0 until 8) {
-                    pattern.add(560)
-                    pattern.add(if (((b shr bit) and 1) == 1) 1690 else 560)
-                }
-            }
-            pattern.add(560)
-            ir.transmit(38000, pattern.toIntArray())
-        } catch (_: Throwable) { }
-    }
-
     // ==================== WAKE-ON-LAN (PC AÇMA) ====================
     private fun sendWakeOnLan(macStr: String) {
         scope.launch {
@@ -719,41 +702,162 @@ if (device.address == "A4:C1:38:74:90:BD") {
         }
     }
 
+    private fun turkishColorToRgb(name: String): Triple<Int, Int, Int>? {
+        return when (name.lowercase(Locale("tr", "TR")).trim()) {
+            "beyaz" -> Triple(255, 255, 255)
+            "kırmızı", "kirmizi" -> Triple(255, 0, 0)
+            "yeşil", "yesil" -> Triple(0, 255, 60)
+            "mavi" -> Triple(0, 0, 255)
+            "mor" -> Triple(150, 0, 255)
+            "turuncu" -> Triple(255, 140, 0)
+            "sarı", "sari" -> Triple(255, 255, 0)
+            "pembe" -> Triple(255, 20, 147)
+            "açık mavi", "acik mavi" -> Triple(30, 100, 255)
+            else -> null
+        }
+    }
+
+    private fun buildToolDeclarations(): JSONArray {
+        fun fn(name: String, desc: String, props: JSONObject, required: List<String>): JSONObject {
+            return JSONObject().apply {
+                put("name", name)
+                put("description", desc)
+                put("parameters", JSONObject().apply {
+                    put("type", "object")
+                    put("properties", props)
+                    put("required", JSONArray(required))
+                })
+            }
+        }
+        fun strProp(desc: String) = JSONObject().apply { put("type", "string"); put("description", desc) }
+        fun intProp(desc: String) = JSONObject().apply { put("type", "integer"); put("description", desc) }
+
+        val declarations = JSONArray()
+        declarations.put(fn(
+            "control_xiaomi_bulb",
+            "Xiaomi Ampul 1S'i açar, kapatır, rengini veya parlaklığını değiştirir.",
+            JSONObject().apply {
+                put("action", strProp("Yapılacak işlem: on, off, color veya brightness"))
+                put("color", strProp("Renk adı (beyaz, kırmızı, yeşil, mavi, mor, turuncu, sarı, pembe). action=color ise zorunlu."))
+                put("brightness", intProp("1 ile 100 arası parlaklık yüzdesi. action=brightness ise zorunlu."))
+            },
+            listOf("action")
+        ))
+        declarations.put(fn(
+            "control_mohuan_led",
+            "MohuanLED Bluetooth şeridini açar, kapatır veya rengini değiştirir.",
+            JSONObject().apply {
+                put("action", strProp("Yapılacak işlem: on, off veya color"))
+                put("color", strProp("Renk adı (beyaz, kırmızı, yeşil, mavi, mor, turuncu, sarı, pembe). action=color ise zorunlu."))
+            },
+            listOf("action")
+        ))
+        declarations.put(fn(
+            "control_all_lights",
+            "Evdeki tüm ışıkları (ampul ve LED şerit) aynı anda açar veya kapatır.",
+            JSONObject().apply { put("action", strProp("on veya off")) },
+            listOf("action")
+        ))
+        declarations.put(fn(
+            "control_fire_tv",
+            "Fire TV Stick'i kumanda eder: yön tuşları, tamam, geri, ana ekran, oynat/duraklat veya YouTube/Prime Video açma.",
+            JSONObject().apply {
+                put("action", strProp("up, down, left, right, ok, back, home, menu, play_pause, youtube veya prime_video"))
+            },
+            listOf("action")
+        ))
+        declarations.put(fn(
+            "wake_pc",
+            "Masaüstü bilgisayarı Wake-on-LAN ile uzaktan açar.",
+            JSONObject(),
+            listOf()
+        ))
+        return declarations
+    }
+
+    private fun executeFunctionCall(name: String, args: JSONObject): String {
+        val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+        return when (name) {
+            "control_xiaomi_bulb" -> {
+                val ip = prefs.getString("bulb_ip", "") ?: ""
+                val token = prefs.getString("bulb_token", "") ?: ""
+                when (args.optString("action")) {
+                    "on" -> { sendXiaomiBulbCommand(ip, token, "set_power", """["on","smooth",300]"""); "Ampulü açtım." }
+                    "off" -> { sendXiaomiBulbCommand(ip, token, "set_power", """["off","smooth",300]"""); "Ampulü kapattım." }
+                    "brightness" -> {
+                        val b = args.optInt("brightness", 80).coerceIn(1, 100)
+                        sendXiaomiBulbCommand(ip, token, "set_bright", "[$b,\"smooth\",200]")
+                        "Ampul parlaklığını yüzde $b yaptım."
+                    }
+                    "color" -> {
+                        val rgb = turkishColorToRgb(args.optString("color", ""))
+                        if (rgb != null) {
+                            val value = (rgb.first shl 16) + (rgb.second shl 8) + rgb.third
+                            sendXiaomiBulbCommand(ip, token, "set_rgb", "[$value,\"smooth\",300]")
+                            "Ampulü ${args.optString("color")} yaptım."
+                        } else "O rengi tanımıyorum."
+                    }
+                    else -> "Ampul için bu işlemi anlayamadım."
+                }
+            }
+            "control_mohuan_led" -> {
+                val mac = prefs.getString("mohuan_mac", "") ?: ""
+                when (args.optString("action")) {
+                    "on" -> { sendMohuanLedCommand(mac, hexToBytes("6996020101")); "LED şeridi açtım." }
+                    "off" -> { sendMohuanLedCommand(mac, hexToBytes("6996020100")); "LED şeridi kapattım." }
+                    "color" -> {
+                        val rgb = turkishColorToRgb(args.optString("color", ""))
+                        if (rgb != null) {
+                            val hex = "69960502" + String.format("%02x%02x%02x", rgb.first, rgb.second, rgb.third)
+                            sendMohuanLedCommand(mac, hexToBytes(hex))
+                            "LED şeridi ${args.optString("color")} yaptım."
+                        } else "O rengi tanımıyorum."
+                    }
+                    else -> "LED şeridi için bu işlemi anlayamadım."
+                }
+            }
+            "control_all_lights" -> {
+                val ip = prefs.getString("bulb_ip", "") ?: ""
+                val token = prefs.getString("bulb_token", "") ?: ""
+                val mac = prefs.getString("mohuan_mac", "") ?: ""
+                if (args.optString("action") == "on") {
+                    sendXiaomiBulbCommand(ip, token, "set_power", """["on","smooth",300]""")
+                    sendMohuanLedCommand(mac, hexToBytes("6996020101"))
+                    "Tüm ışıkları açtım."
+                } else {
+                    sendXiaomiBulbCommand(ip, token, "set_power", """["off","smooth",300]""")
+                    sendMohuanLedCommand(mac, hexToBytes("6996020100"))
+                    "Tüm ışıkları kapattım."
+                }
+            }
+            "control_fire_tv" -> {
+                val ip = prefs.getString("ftv_ip", "") ?: ""
+                when (args.optString("action")) {
+                    "up" -> { sendFireTvShell(ip, "input keyevent 19"); "Yukarı." }
+                    "down" -> { sendFireTvShell(ip, "input keyevent 20"); "Aşağı." }
+                    "left" -> { sendFireTvShell(ip, "input keyevent 21"); "Sola." }
+                    "right" -> { sendFireTvShell(ip, "input keyevent 22"); "Sağa." }
+                    "ok" -> { sendFireTvShell(ip, "input keyevent 23"); "Tamam." }
+                    "back" -> { sendFireTvShell(ip, "input keyevent 4"); "Geri." }
+                    "home" -> { sendFireTvShell(ip, "input keyevent 3"); "Ana ekrana döndüm." }
+                    "menu" -> { sendFireTvShell(ip, "input keyevent 82"); "Menü." }
+                    "play_pause" -> { sendFireTvShell(ip, "input keyevent 85"); "Oynat, duraklat." }
+                    "youtube" -> { sendFireTvShell(ip, "monkey -p com.amazon.firetv.youtube 1"); "YouTube'u açtım." }
+                    "prime_video" -> { sendFireTvShell(ip, "monkey -p com.amazon.avod.thirdpartyclient 1"); "Prime Video'yu açtım." }
+                    else -> "Televizyon için bu işlemi anlayamadım."
+                }
+            }
+            "wake_pc" -> {
+                sendWakeOnLan(prefs.getString("pc_mac", "") ?: "")
+                "Bilgisayara açma sinyali gönderdim."
+            }
+            else -> "Bu komutu tanımıyorum."
+        }
+    }
+
     private fun handleVoiceQuery(query: String) {
         jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(query)}, 'user')")
         jsCall("window.onVoiceState && window.onVoiceState('thinking')")
-
-        val q = query.lowercase(Locale("tr", "TR"))
-        when {
-            q.contains("ışıkları aç") || q.contains("tümünü aç") || q.contains("aydınlat") -> {
-                jsCall("window.triggerScene && window.triggerScene('bright')")
-                val reply = "Tüm ışıklar açıldı."
-                jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(reply)}, 'ai')")
-                speak(reply)
-                return
-            }
-            q.contains("ışıkları kapat") || q.contains("tümünü kapat") || q.contains("her şeyi kapat") -> {
-                jsCall("window.triggerScene && window.triggerScene('off')")
-                val reply = "Tüm ışıklar kapatıldı."
-                jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(reply)}, 'ai')")
-                speak(reply)
-                return
-            }
-            q.contains("sinema") -> {
-                jsCall("window.triggerScene && window.triggerScene('cinema')")
-                val reply = "Sinema modu aktif edildi."
-                jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(reply)}, 'ai')")
-                speak(reply)
-                return
-            }
-            q.contains("bilgisayarı aç") || q.contains("pc aç") || q.contains("bilgisayar aç") -> {
-                jsCall("window.wakePc && window.wakePc()")
-                val reply = "Bilgisayara açma sinyali gönderildi."
-                jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(reply)}, 'ai')")
-                speak(reply)
-                return
-            }
-        }
 
         val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
         val apiKey = prefs.getString("gemini_key", "")?.trim() ?: ""
@@ -778,28 +882,40 @@ if (device.address == "A4:C1:38:74:90:BD") {
                 val body = JSONObject().apply {
                     put("systemInstruction", JSONObject().apply {
                         put("parts", JSONArray().put(JSONObject().put("text",
-                            "Sen bir akıllı oda paneli sesli asistanısın. Kısa, net, doğal ve sesli okunmaya uygun Türkçe cevaplar ver. Maksimum 2-3 cümle kullan, markdown sembolü kullanma."
+                            "Sen bir akıllı oda paneli sesli asistanısın. Kullanıcı bir cihazı kontrol etmek istiyorsa sana verilen fonksiyonlardan uygun olanı çağır. Cihazlarla ilgisi olmayan sorular için kısa, doğal, Türkçe, maksimum 2-3 cümlelik, markdown kullanmayan cevaplar ver."
                         )))
                     })
                     put("contents", JSONArray().put(JSONObject().apply {
                         put("parts", JSONArray().put(JSONObject().put("text", query)))
+                    }))
+                    put("tools", JSONArray().put(JSONObject().apply {
+                        put("functionDeclarations", buildToolDeclarations())
                     }))
                 }
 
                 conn.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
                 val respStr = conn.inputStream.bufferedReader().readText()
                 val json = JSONObject(respStr)
-                val answer = json.getJSONArray("candidates")
+                val part = json.getJSONArray("candidates")
                     .getJSONObject(0)
                     .getJSONObject("content")
                     .getJSONArray("parts")
                     .getJSONObject(0)
-                    .getString("text")
-                    .replace("*", "")
-                    .trim()
 
-                jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(answer)}, 'ai')")
-                speak(answer)
+                if (part.has("functionCall")) {
+                    val fc = part.getJSONObject("functionCall")
+                    val fnName = fc.getString("name")
+                    val fnArgs = fc.optJSONObject("args") ?: JSONObject()
+                    val confirmation = executeFunctionCall(fnName, fnArgs)
+                    jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(confirmation)}, 'ai')")
+                    speak(confirmation)
+                } else {
+                    val answer = part.optString("text", "Anlayamadım.")
+                        .replace("*", "")
+                        .trim()
+                    jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(answer)}, 'ai')")
+                    speak(answer)
+                }
             } catch (_: Throwable) {
                 val err = "Şu an bağlantıda bir sorun oluştu."
                 jsCall("window.onVoiceText && window.onVoiceText(${JSONObject.quote(err)}, 'ai')")
@@ -865,8 +981,8 @@ if (device.address == "A4:C1:38:74:90:BD") {
         }
 
         @JavascriptInterface
-        fun sendIr(address: Int, command: Int) {
-            transmitNecIr(address, command)
+        fun controlTapo(ip: String, turnOn: Boolean) {
+            if (ip.isNotBlank()) sendTapoCommand(ip.trim(), turnOn)
         }
 
         @JavascriptInterface
@@ -912,5 +1028,106 @@ if (device.address == "A4:C1:38:74:90:BD") {
         try { adbSocket?.close() } catch (_: Throwable) { }
         try { tts?.shutdown() } catch (_: Throwable) { }
         try { speechRecognizer?.destroy() } catch (_: Throwable) { }
+    }
+
+    // ==================== TAPO P100 (KLAP PROTOKOLÜ) ====================
+    private fun sendTapoCommand(ip: String, deviceOn: Boolean) {
+        scope.launch {
+            try {
+                val prefs = getSharedPreferences("panel_cfg", Context.MODE_PRIVATE)
+                val email = prefs.getString("tapo_email", "")?.trim() ?: ""
+                val password = prefs.getString("tapo_password", "") ?: ""
+                if (email.isEmpty() || password.isEmpty()) return@launch
+
+                val localSeed = ByteArray(16)
+                SecureRandom().nextBytes(localSeed)
+
+                val uHash = MessageDigest.getInstance("SHA-1").digest(email.toByteArray(Charsets.UTF_8))
+                val pHash = MessageDigest.getInstance("SHA-1").digest(password.toByteArray(Charsets.UTF_8))
+                val authHash = MessageDigest.getInstance("SHA-256").digest(uHash + pHash)
+
+                val baseUrl = "http://$ip/app"
+
+                val h1Conn = (URL("$baseUrl/handshake1").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                }
+                h1Conn.outputStream.use { it.write(localSeed) }
+                if (h1Conn.responseCode != 200) { h1Conn.disconnect(); return@launch }
+                val h1Resp = h1Conn.inputStream.use { it.readBytes() }
+
+                var sessionCookie: String? = null
+                for ((k, values) in h1Conn.headerFields) {
+                    if (k != null && k.equals("Set-Cookie", ignoreCase = true)) {
+                        for (v in values) {
+                            if (v.startsWith("TP_SESSIONID=")) sessionCookie = v.substringBefore(";")
+                        }
+                    }
+                }
+                h1Conn.disconnect()
+                if (sessionCookie == null || h1Resp.size < 48) return@launch
+
+                val remoteSeed = h1Resp.copyOfRange(0, 16)
+                val serverHash = h1Resp.copyOfRange(16, 48)
+                val expectedHash = MessageDigest.getInstance("SHA-256").digest(localSeed + remoteSeed + authHash)
+                if (!expectedHash.contentEquals(serverHash)) return@launch
+
+                val h2Payload = MessageDigest.getInstance("SHA-256").digest(remoteSeed + localSeed + authHash)
+                val h2Conn = (URL("$baseUrl/handshake2").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                    setRequestProperty("Cookie", sessionCookie)
+                }
+                h2Conn.outputStream.use { it.write(h2Payload) }
+                val h2Ok = h2Conn.responseCode == 200
+                h2Conn.disconnect()
+                if (!h2Ok) return@launch
+
+                val agreed = localSeed + remoteSeed + authHash
+                val key = MessageDigest.getInstance("SHA-256").digest("lsk".toByteArray(Charsets.UTF_8) + agreed).copyOfRange(0, 16)
+                val fullIv = MessageDigest.getInstance("SHA-256").digest("iv".toByteArray(Charsets.UTF_8) + agreed)
+                val ivBase = fullIv.copyOfRange(0, 12)
+                val sigKey = MessageDigest.getInstance("SHA-256").digest("ldk".toByteArray(Charsets.UTF_8) + agreed).copyOfRange(0, 28)
+
+                var seq = ByteBuffer.wrap(fullIv, 28, 4).order(ByteOrder.BIG_ENDIAN).int
+                seq += 1
+
+                val requestJson = JSONObject().apply {
+                    put("method", "set_device_info")
+                    put("params", JSONObject().put("device_on", deviceOn))
+                    put("requestTimeMils", System.currentTimeMillis())
+                    put("terminalUUID", "00-00-00-00-00-00")
+                }.toString()
+
+                val ivFull = ByteBuffer.allocate(16).apply {
+                    put(ivBase)
+                    putInt(seq)
+                }.array()
+
+                val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
+                cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), IvParameterSpec(ivFull))
+                val ciphertext = cipher.doFinal(requestJson.toByteArray(Charsets.UTF_8))
+
+                val seqBytes = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(seq).array()
+                val signature = MessageDigest.getInstance("SHA-256").digest(sigKey + seqBytes + ciphertext)
+                val body = signature + ciphertext
+
+                val reqConn = (URL("$baseUrl/request?seq=$seq").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 5000
+                    readTimeout = 5000
+                    setRequestProperty("Cookie", sessionCookie)
+                }
+                reqConn.outputStream.use { it.write(body) }
+                reqConn.responseCode
+                reqConn.inputStream.close()
+                reqConn.disconnect()
+            } catch (_: Throwable) { }
+        }
     }
 }
