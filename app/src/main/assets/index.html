@@ -237,26 +237,14 @@
 
   <!-- ANA 3 SÜTUN -->
   <div class="grid">
-    <!-- SÜTUN 1: SENARYOLAR & KIZILÖTESİ LED -->
+    <!-- SÜTUN 1: HIZLI MODLAR -->
     <div class="card">
       <div class="card-title">Hızlı Modlar & Sistem</div>
       <div class="btn-grid-2">
         <button class="btn primary" onclick="triggerScene('bright')">☀️ Tüm LED'leri Aç</button>
         <button class="btn danger" onclick="triggerScene('off')">🌙 Tümünü Kapat</button>
-        <button class="btn purple" onclick="triggerScene('cinema')">🎬 Sinema Modu</button>
+        <button class="btn purple" onclick="toggleTapoPlug()">🔌 Tapo Priz Aç/Kapa</button>
         <button class="btn green" onclick="wakePc()">🖥️ PC'yi Aç</button>
-      <div class="card-title">Tapo P100 Priz</div>
-<button type="button" class="btn" onclick="toggleTapoPlug()">Priz Aç / Kapa</button>
-      </div>
-
-      <div class="card-title">Kumandalı Şerit LED (IR)</div>
-      <div class="btn-grid-3">
-        <button class="btn" onclick="irCmd(0x40)">IR Aç</button>
-        <button class="btn" onclick="irCmd(0x41)">IR Kapat</button>
-        <button class="btn" onclick="irCmd(0x44)">Beyaz</button>
-        <button class="btn" onclick="irCmd(0x58)">Kırmızı</button>
-        <button class="btn" onclick="irCmd(0x59)">Yeşil</button>
-        <button class="btn" onclick="irCmd(0x45)">Mavi</button>
       </div>
     </div>
 
@@ -281,12 +269,13 @@
         <button class="btn primary" onclick="mohuanPower(true)">LED Aç</button>
         <button class="btn" onclick="mohuanPower(false)">LED Kapat</button>
       </div>
+      <input type="range" min="10" max="100" value="100" id="mohuanBrightRange" onchange="mohuanBright(this.value)" />
       <div class="swatches">
-        <div class="swatch" style="background:#ffffff;" onclick="mohuanRgb(255,255,255)"></div>
-        <div class="swatch" style="background:#ef4444;" onclick="mohuanRgb(255,0,0)"></div>
-        <div class="swatch" style="background:#10b981;" onclick="mohuanRgb(0,255,80)"></div>
-        <div class="swatch" style="background:#0000FF;" onclick="mohuanRgb(0,0,255)"></div>
-        <div class="swatch" style="background:#8b5cf6;" onclick="mohuanRgb(150,0,255)"></div>
+        <div class="swatch" style="background:#ffffff;" onclick="mohuanSetColor(255,255,255)"></div>
+        <div class="swatch" style="background:#ef4444;" onclick="mohuanSetColor(255,0,0)"></div>
+        <div class="swatch" style="background:#10b981;" onclick="mohuanSetColor(0,255,80)"></div>
+        <div class="swatch" style="background:#0000FF;" onclick="mohuanSetColor(0,0,255)"></div>
+        <div class="swatch" style="background:#8b5cf6;" onclick="mohuanSetColor(150,0,255)"></div>
       </div>
     </div>
 
@@ -338,6 +327,9 @@
         <div class="field"><label>Gece Karartma Bitiş (HH:MM)</label><input id="cfg_night_end" value="10:00" /></div>
         <div class="field"><label>Sesli Uyanma Kelimesi</label><input id="cfg_wake_word" value="jarvis" /></div>
         <div class="field"><label>Ücretsiz Gemini API Anahtarı</label><input id="cfg_gemini_key" type="password" placeholder="AIzaSy..." /></div>
+        <div class="field"><label>Tapo P100 IP Adresi</label><input id="cfg_tapo_ip" placeholder="192.168.1.60" /></div>
+        <div class="field"><label>Tapo Hesap E-postası</label><input id="cfg_tapo_email" placeholder="ornek@gmail.com" /></div>
+        <div class="field"><label>Tapo Hesap Şifresi</label><input id="cfg_tapo_password" type="password" placeholder="••••••••" /></div>
       </div>
       <div class="btn-grid-2" style="margin-top:4px;">
         <button class="btn primary" onclick="saveSettings()">Kaydet ve Kapat</button>
@@ -350,10 +342,14 @@
   let cfg = {
     ftv_ip: "", bulb_ip: "", bulb_token: "", mohuan_mac: "",
     thermo_mac: "", pc_mac: "", night_start: "03:00", night_end: "10:00",
-    wake_word: "jarvis", gemini_key: ""
+    wake_word: "jarvis", gemini_key: "", tapo_ip: "", tapo_email: "", tapo_password: ""
   };
   let alwaysListen = false;
   let tempWakeUntil = 0;
+  let lastWeatherFetch = 0;
+  let tapoIsOn = false;
+  let mohuanLastColor = { r: 255, g: 255, b: 255 };
+  let mohuanBrightness = 100;
 
   function loadAllConfig() {
     if (window.AndroidBridge) {
@@ -396,6 +392,9 @@
       weekday: "short", day: "numeric", month: "long"
     });
     checkNightMode(hh + ":" + mm);
+    if (Date.now() - lastWeatherFetch > 600000) {
+      fetchWeather();
+    }
   }
 
   function toMinutes(hhmm) {
@@ -427,6 +426,7 @@
   }
 
   async function fetchWeather() {
+    lastWeatherFetch = Date.now();
     try {
       const r = await fetch("https://api.open-meteo.com/v1/forecast?latitude=40.7575&longitude=30.4017&current=temperature_2m&timezone=Europe%2FIstanbul");
       const d = await r.json();
@@ -440,11 +440,14 @@
     document.getElementById("indoorTemp").innerText = `${temp}°C`;
     document.getElementById("indoorHum").innerText = `%${hum}`;
     syncNightSummary();
+  };
+
   function toggleTapoPlug() {
+    tapoIsOn = !tapoIsOn;
     if (window.AndroidBridge && window.AndroidBridge.controlTapo) {
-        window.AndroidBridge.controlTapo();
+      window.AndroidBridge.controlTapo(cfg.tapo_ip, tapoIsOn);
     }
-}};
+  }
 
   function syncNightSummary() {
     const outT = document.getElementById("outdoorTemp").innerText;
@@ -470,11 +473,23 @@
   function mohuanPower(on) {
     if (window.AndroidBridge) AndroidBridge.controlMohuanLed(cfg.mohuan_mac, on ? "6996020101" : "6996020100");
   }
-  function mohuanRgb(r, g, b) {
+  function mohuanSendColor() {
+    const scale = mohuanBrightness / 100;
+    const r = Math.round(mohuanLastColor.r * scale);
+    const g = Math.round(mohuanLastColor.g * scale);
+    const b = Math.round(mohuanLastColor.b * scale);
     if (window.AndroidBridge) AndroidBridge.controlMohuanLed(cfg.mohuan_mac, "69960502" + hex2(r) + hex2(g) + hex2(b));
   }
+  function mohuanSetColor(r, g, b) {
+    mohuanLastColor = { r, g, b };
+    document.getElementById("mohuanBrightRange").value = mohuanBrightness;
+    mohuanSendColor();
+  }
+  function mohuanBright(val) {
+    mohuanBrightness = Number(val);
+    mohuanSendColor();
+  }
 
-  function irCmd(cmd) { if (window.AndroidBridge) AndroidBridge.sendIr(0x00, cmd); }
   function ftvKey(code) { if (window.AndroidBridge) AndroidBridge.fireTvKey(cfg.ftv_ip, code); }
   function ftvApp(pkg) { if (window.AndroidBridge) AndroidBridge.fireTvApp(cfg.ftv_ip, pkg); }
   window.wakePc = function() { if (window.AndroidBridge) AndroidBridge.wakePc(cfg.pc_mac); };
@@ -482,16 +497,10 @@
   window.triggerScene = function(mode) {
     if (mode === "bright") {
       bulbPower(true); setTimeout(() => { bulbTemp(4500); bulbBright(100); }, 250);
-      mohuanPower(true); setTimeout(() => mohuanRgb(255, 255, 255), 350);
-      irCmd(0x40); setTimeout(() => irCmd(0x44), 250);
+      mohuanPower(true); setTimeout(() => mohuanSetColor(255, 255, 255), 350);
     } else if (mode === "off") {
       bulbPower(false);
       mohuanPower(false);
-      irCmd(0x41);
-    } else if (mode === "cinema") {
-      bulbPower(false);
-      mohuanPower(true); setTimeout(() => mohuanRgb(140, 0, 255), 350);
-      irCmd(0x40); setTimeout(() => irCmd(0x45), 250);
     }
   };
 
@@ -517,7 +526,6 @@
   updateClock();
   fetchWeather();
   setInterval(updateClock, 5000);
-  setInterval(fetchWeather, 900000);
 </script>
 </body>
 </html>
